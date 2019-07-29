@@ -1,0 +1,12 @@
+version: '3'
+
+services:
+  drf_ecs:
+    image: drf_ecs:latest
+    environment:
+      - DJANGO_SETTINGS_MODULE=core.settings.docker-compose
+      - AWS_PROFILE=${AWS_PROFILE}
+    ports:
+      - '8080:8080'
+    volumes:
+      - ~/.aws/:/root/.aws:ro

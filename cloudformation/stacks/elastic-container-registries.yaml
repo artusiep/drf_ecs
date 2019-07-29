@@ -1,0 +1,77 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  CloudFormation template that can be used to create ECRs. ECRs will be used as
+  artifacts storage for deployable items. Separate ECR for each component is
+  created.
+
+Parameters:
+
+  AppName:
+    Description: >
+      This will be app name
+    Type: String
+
+  Environment:
+    Description: >
+      This points out which environment is used.
+    Type: String
+    AllowedValues:
+      - dev
+      - qa
+      - prod
+    ConstraintDescription: >
+      Must be one of the defined allowed values.
+
+Mappings:
+
+  CustomVariables:
+    Variables:
+      DaysToRetainUntaggedContainerImages: 2
+      MaxContainerImagesToRetain: 100
+
+Resources: 
+
+  AppServerContainerRegistry:
+    Type: AWS::ECR::Repository
+    Properties:
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub
+            - |
+              {
+                "rules": [
+                  {
+                    "rulePriority": 1,
+                    "description": "Only keep untagged images for ${DaysToRetainUntaggedContainerImages} days",
+                    "selection": {
+                      "tagStatus": "untagged",
+                      "countType": "sinceImagePushed",
+                      "countUnit": "days",
+                      "countNumber": ${DaysToRetainUntaggedContainerImages}
+                    },
+                    "action": { "type": "expire" }
+                  },
+                  {
+                    "rulePriority": 2,
+                    "description": "Keep only ${MaxContainerImagesToRetain} images, expire all others",
+                    "selection": {
+                      "tagStatus": "any",
+                      "countType": "imageCountMoreThan",
+                      "countNumber": ${MaxContainerImagesToRetain}
+                    },
+                    "action": { "type": "expire" }
+                  }
+                ]
+              }
+            - DaysToRetainUntaggedContainerImages: !FindInMap [CustomVariables, Variables, DaysToRetainUntaggedContainerImages]
+              MaxContainerImagesToRetain: !FindInMap [CustomVariables, Variables, MaxContainerImagesToRetain]
+
+Outputs:
+
+  AppServerContainerRegistryName:
+    Description: >
+      !Sub Name of ECR for ${AppName}.
+    Value: !Ref AppServerContainerRegistry
+    Export:
+      Name: !Sub ${AppName}-${Environment}-docker-registry-${AWS::Region}

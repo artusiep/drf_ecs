@@ -1,0 +1,87 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: >
+  This template can be used to create CodeBuild CI project. After creation it will with the use of github webhooks connect and enable to verify if tests are passing.
+  Build spec can be find in buildspecs/test.yaml
+
+Parameters:
+  AppName:
+    Description: >
+      This will be app name
+    Type: String
+
+  GitHubRepoName:
+    Type: String
+
+  GitHubRepoOwner:
+    Type: String
+
+Resources:
+  CodeBuildCIServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - secretsmanager:GetSecretValue
+              - Resource:
+                  Fn::Sub:
+                    - arn:aws:s3:::${bucket_name}/*
+                    - bucket_name:
+                        Fn::ImportValue:
+                          !Sub ${AppName}-dev-s3-codepipeline-artifact-bucket-name-${AWS::Region}
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetObjectVersion
+
+
+  CodeBuildCIProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Description: CodeBuild project which run tests on / before merging to master
+      Source:
+        Type: GITHUB
+        Auth:
+          Type: OAUTH
+          Resource: '{{resolve:secretsmanager:github_oauth_token:SecretString:token}}'
+        BuildSpec: buildspecs/test.yaml
+        Location: !Sub https://github.com/${GitHubRepoOwner}/${GitHubRepoName}
+        ReportBuildStatus: true
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:1.0
+        Type: LINUX_CONTAINER
+        PrivilegedMode: true
+      Name: !Sub ${AppName}-CI-project-${AWS::Region}
+      TimeoutInMinutes: 15
+      ServiceRole: !Ref CodeBuildCIServiceRole
+      Triggers:
+        Webhook: true
+        FilterGroups:
+          - - Type: EVENT
+              Pattern: PULL_REQUEST_CREATED, PULL_REQUEST_UPDATED, PULL_REQUEST_REOPENED
+
+Outputs:
+  PipelineUrl:
+    Value: !Sub https://${AWS::Region}.console.aws.amazon.com/codesuite/codebuild/projects/${CodeBuildCIProject}

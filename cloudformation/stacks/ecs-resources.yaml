@@ -1,0 +1,114 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  This template creates Task Definitions and Service in previously created ECS cluster.
+
+Parameters:
+
+  AppName:
+    Description: >
+      This will be app name
+    Type: String
+
+  Environment:
+    Description: >
+      This points out which environment is used.
+    Type: String
+    AllowedValues:
+      - dev
+      - qa
+      - prod
+    ConstraintDescription: >
+      Must be one of the defined allowed values.
+
+
+Mappings:
+
+  CustomVariables:
+    Variables:
+      HealthCheckGracePeriod: 120
+
+Resources:
+
+  CloudWatchLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub ${AppName}-${Environment}
+      RetentionInDays: 365
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${AppName}-${Environment}
+      NetworkMode: bridge
+      ContainerDefinitions:
+        - Name: application-server
+          Image:
+              Fn::Sub:
+              - ${aws_account_id}.dkr.ecr.${aws_region}.amazonaws.com/${ecr_docker_repository_name}
+              - aws_account_id: !Ref AWS::AccountId
+                aws_region: !Ref AWS::Region
+                ecr_docker_repository_name:
+                  Fn::ImportValue:
+                    !Sub ${AppName}-${Environment}-docker-registry-${AWS::Region}
+          Essential: True
+          PortMappings:
+            - ContainerPort: 8080
+          Environment:
+            - Name: ENVIRONMENT
+              Value: !Sub ${Environment}
+            - Name: REGION
+              Value: !Sub ${AWS::Region}
+            - Name: DJANGO_SETTINGS_MODULE
+              Value: !Sub api.settings.${Environment}
+          LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                  awslogs-group: !Ref CloudWatchLogsGroup
+                  awslogs-region: !Sub ${AWS::Region}
+                  awslogs-stream-prefix: !Sub ${AppName}
+          MemoryReservation: 384
+          Cpu: 256
+
+  EcsServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceRole
+
+  Service:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster:
+        Fn::ImportValue:
+          !Sub ${AppName}-${Environment}-cluster-name-${AWS::Region}
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+      DesiredCount: 2
+      HealthCheckGracePeriodSeconds: !FindInMap [CustomVariables, Variables, HealthCheckGracePeriod]
+      LaunchType: EC2
+      PlacementStrategies:
+        - Field: instanceId
+          Type: spread
+      LoadBalancers:
+        - ContainerName: application-server
+          ContainerPort: 8080
+          TargetGroupArn:
+            Fn::ImportValue:
+              !Sub ${AppName}-${Environment}-cluster-default-target-group-arn-${AWS::Region}
+      Role: !Ref EcsServiceRole
+      SchedulingStrategy: REPLICA
+      ServiceName: !Sub ${AppName}-${Environment}
+      TaskDefinition: !Ref TaskDefinition
+# As service documentation says:
+# The `family` and `revision` \(`family:revision`\) or full ARN of the task definition to run in your service\. If a `revision` is not specified, the latest `ACTIVE` revision is used\.
+# But this for now it doesn't work. Hopefully in the future it will

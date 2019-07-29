@@ -1,0 +1,218 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: >
+  This template can be used to create both CodeBuild project and CodePipeline pipeline for deployment.
+
+Parameters:
+
+  AppName:
+    Description: >
+      This will be app name
+    Type: String
+
+  Environment:
+    Description: >
+      This points out which environment is used.
+    Type: String
+    AllowedValues:
+      - dev
+      - qa
+      - prod
+    ConstraintDescription: >
+      Must be one of the defined allowed values.
+
+  GitHubRepoName:
+    Type: String
+
+  GitHubDeploymentBranch:
+    Type: String
+
+  GitHubRepoOwner:
+    Type: String
+
+Resources:
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - ecr:GetAuthorizationToken
+              - Resource:
+                  Fn::Sub:
+                    - arn:aws:s3:::${bucket_name}/*
+                    - bucket_name:
+                        Fn::ImportValue:
+                          !Sub ${AppName}-${Environment}-s3-codepipeline-artifact-bucket-name-${AWS::Region}
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetObjectVersion
+              - Resource:
+                  Fn::Sub:
+                    - arn:aws:ecr:${aws_region}:${aws_account_id}:repository/${ecr_docker_repository_name}
+                    - aws_account_id: !Ref AWS::AccountId
+                      aws_region: !Ref AWS::Region
+                      ecr_docker_repository_name:
+                        Fn::ImportValue:
+                          !Sub ${AppName}-${Environment}-docker-registry-${AWS::Region}
+                Effect: Allow
+                Action:
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource:
+                  Fn::Sub:
+                    - arn:aws:s3:::${bucket_name}/*
+                    - bucket_name:
+                        Fn::ImportValue:
+                          !Sub ${AppName}-${Environment}-s3-codepipeline-artifact-bucket-name-${AWS::Region}
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:GetBucketVersioning
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - ecs:DescribeServices
+                  - ecs:DescribeTaskDefinition
+                  - ecs:DescribeTasks
+                  - ecs:ListTasks
+                  - ecs:RegisterTaskDefinition
+                  - ecs:UpdateService
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+                  - iam:PassRole
+
+  CodeBuildDeploymentProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Description: CodeBuild project which builds images and push them to ECR
+      Artifacts:
+        Type: CODEPIPELINE
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: buildspecs/deploy.yaml
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/docker:17.09.0
+        Type: LINUX_CONTAINER
+        EnvironmentVariables:
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+          - Name: REPOSITORY_URI
+            Value:
+              Fn::Sub:
+                - ${aws_account_id}.dkr.ecr.${aws_region}.amazonaws.com/${ecr_docker_repository_name}
+                - aws_account_id: !Ref AWS::AccountId
+                  aws_region: !Ref AWS::Region
+                  ecr_docker_repository_name:
+                    Fn::ImportValue:
+                      !Sub ${AppName}-${Environment}-docker-registry-${AWS::Region}
+      Name: !Sub ${AppName}-${Environment}-deployment-project-${AWS::Region}
+      ServiceRole: !Ref CodeBuildServiceRole
+
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location:
+          Fn::ImportValue:
+            !Sub ${AppName}-${Environment}-s3-codepipeline-artifact-bucket-name-${AWS::Region}
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: App
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Version: 1
+                Provider: GitHub
+              Configuration:
+                Owner: !Ref GitHubRepoOwner
+                Repo: !Ref GitHubRepoName
+                Branch: !Ref GitHubDeploymentBranch
+                OAuthToken: '{{resolve:secretsmanager:github_oauth_token:SecretString:token}}'
+              OutputArtifacts:
+                - Name: App
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: Build
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref CodeBuildDeploymentProject
+              InputArtifacts:
+                - Name: App
+              OutputArtifacts:
+                - Name: BuildOutput
+              RunOrder: 1
+        - Name: Deploy
+          Actions:
+            - Name: Deploy
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: 1
+                Provider: ECS
+              Configuration:
+                ClusterName:
+                  Fn::ImportValue:
+                    !Sub ${AppName}-${Environment}-cluster-name-${AWS::Region}
+                ServiceName: !Sub ${AppName}-${Environment}
+                FileName: images.json
+              InputArtifacts:
+                - Name: BuildOutput
+              RunOrder: 1
+
+
+Outputs:
+  PipelineUrl:
+    Value: !Sub https://console.aws.amazon.com/codepipeline/home?region=${AWS::Region}#/view/${Pipeline}

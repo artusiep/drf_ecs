@@ -1,0 +1,43 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  This template can be used to create CodePipeline S3 artifact bucket. Bucket is
+  used to store temporary artifacts of running CodePipeline.
+
+Parameters:
+
+  AppName:
+    Description: >
+      This will be app name
+    Type: String
+
+  Environment:
+    Description: >
+      This points out which environment is used.
+    Type: String
+    AllowedValues:
+      - dev
+      - qa
+      - prod
+    ConstraintDescription: >
+      Must be one of the defined allowed values.
+
+Resources:
+
+  CodePipelineArtifactBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+
+  CodePipelineArtifactBucketName:
+    Description: >
+      Name of CodePipeline S3 artifacts bucket.
+    Value: !Ref CodePipelineArtifactBucket
+    Export:
+      Name: !Sub ${AppName}-${Environment}-s3-codepipeline-artifact-bucket-name-${AWS::Region}

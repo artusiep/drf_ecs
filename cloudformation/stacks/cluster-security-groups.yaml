@@ -1,0 +1,104 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  This template contains the security groups required by cluster stack.
+
+Parameters:
+
+  AppName:
+    Description: >
+      This will be app name
+    Type: String
+
+  Environment:
+    Description: >
+      This points out which environment is used.
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - qa
+      - prod
+    ConstraintDescription: >
+      Must be one of the defined allowed values.
+
+Resources:
+
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId:
+        Fn::ImportValue:
+          !Sub hb-tracking-cluster-vpc-resource-id-${AWS::Region}-${Environment}
+      GroupDescription: Access to the load balancer that sits in front of ECS
+      SecurityGroupIngress:
+        - CidrIp: 0.0.0.0/0
+          FromPort: 8080
+          IpProtocol: TCP
+          ToPort: 8080
+        - CidrIp: 0.0.0.0/0
+          FromPort: 80
+          IpProtocol: TCP
+          ToPort: 80
+        - CidrIp: 0.0.0.0/0
+          FromPort: 443
+          IpProtocol: TCP
+          ToPort: 443
+      Tags:
+        - Key: Name
+          Value: !Sub ${AppName}-${Environment}-load-balancer-security-group
+
+  EcsHostSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId:
+        Fn::ImportValue:
+          !Sub hb-tracking-cluster-vpc-resource-id-${AWS::Region}-${Environment}
+      GroupDescription: Access to the ECS hosts
+      SecurityGroupIngress:
+        - SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+          IpProtocol: -1
+        - SourceSecurityGroupId: !Ref BastionSecurityGroup
+          FromPort: 22
+          IpProtocol: TCP
+          ToPort: 22
+      Tags:
+        - Key: Name
+          Value: !Sub "${AppName}-ecs-host-security-group-${Environment}"
+
+  BastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId:
+        Fn::ImportValue:
+          !Sub hb-tracking-cluster-vpc-resource-id-${AWS::Region}-${Environment}
+      GroupDescription: Security Group for Bastion node
+      SecurityGroupIngress:
+        - CidrIp: 0.0.0.0/0
+          FromPort: 22
+          IpProtocol: TCP
+          ToPort: 22
+      Tags:
+        - Key: Name
+          Value: !Sub "${AppName}-bastion-host-security-group-${Environment}"
+
+Outputs:
+
+  LoadBalancerSecurityGroupId:
+    Description: A resource ID of the security group for LB
+    Value: !Ref LoadBalancerSecurityGroup
+    Export:
+      Name: !Sub ${AppName}-${Environment}-cluster-load-balancer-security-group-id-${AWS::Region}
+
+  EcsHostSecurityGroupId:
+    Description: A resource ID of the security group for ECS hosts
+    Value: !Ref EcsHostSecurityGroup
+    Export:
+      Name: !Sub ${AppName}-${Environment}-cluster-ecs-host-security-group-id-${AWS::Region}
+
+  BastionHostSecurityGroupId:
+    Description: A resource ID of the security group for Bastion host
+    Value: !Ref BastionSecurityGroup
+    Export:
+      Name: !Sub ${AppName}-${Environment}-bastion-host-security-group-id-${AWS::Region}
