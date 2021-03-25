@@ -17,7 +17,7 @@ Jinja2==2.10.1
 MarkupSafe==1.1.1
 PyJWT==1.7.1
 pytz==2019.1
-PyYAML==5.1.1
+PyYAML==5.4
 requests==2.22.0
 ruamel.yaml==0.16.0
 ruamel.yaml.clib==0.1.0
